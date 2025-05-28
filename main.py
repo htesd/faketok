@@ -1097,6 +1097,49 @@ async def check_video_status(uid: int, vid: int, db: Session = Depends(get_db)):
         "is_favorited": favorite is not None
     }
 
+
+
+from video_processor import process_video_for_summary
+
+@app.post("/video/{vid}/summarize")
+async def summarize_video_content(
+    vid: int,
+    db: Session = Depends(get_db)
+):
+    """
+    对指定视频进行大模型总结。
+    如果视频时长和转录字数满足条件，则生成总结并存储。
+    """
+    video = db.query(models.Video).filter(models.Video.vid == vid).first()
+    if not video:
+        raise HTTPException(status_code=404, detail="Video not found")
+
+    # 检查是否已存在总结，避免重复处理
+    existing_summary = db.query(models.VideoSummary).filter(models.VideoSummary.vid == vid).first()
+    if existing_summary:
+        return {"success": True, "message": "Video already summarized", "summary": existing_summary.summary}
+
+    # 获取视频的完整文件路径
+    # 注意：这里假设 video.video_url 存储的是相对于 'static/videos/' 的文件名
+    video_full_path = os.path.join(os.getcwd(), "static", "videos", video.video_url)
+
+    if not os.path.exists(video_full_path):
+        raise HTTPException(status_code=404, detail="Video file not found on server.")
+
+    # 异步执行总结任务
+    summary = await process_video_for_summary(vid, video_full_path)
+
+    if summary:
+        # 将总结保存到数据库
+        new_summary = models.VideoSummary(vid=vid, summary=summary)
+        db.add(new_summary)
+        db.commit()
+        db.refresh(new_summary)
+        return {"success": True, "message": "Video summarized successfully", "summary": summary}
+    else:
+        return {"success": False, "message": "Video did not meet summary criteria or encountered an error during processing."}
+    
+
 # 超分辨率相关API (替代方案)
 @app.get("/video/{vid}/resolutions")
 async def get_video_resolutions(vid: int, db: Session = Depends(get_db)):
