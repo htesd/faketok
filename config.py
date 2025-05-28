@@ -1,4 +1,6 @@
 # config.py
+import os
+
 OPENAI_API_KEY = "sk-HaD9f82zQDSAxgDJ269fF221Fe41457b8820D09949B517B4"
 # 新增：OpenAI API 的基础 URL，默认为官方URL，如果使用代理，请在.env中设置
 OPENAI_API_BASE_URL = "https://apis.bltcy.ai/v1"
@@ -7,3 +9,7 @@ OPENAI_API_BASE_URL = "https://apis.bltcy.ai/v1"
 VIDEO_SUMMARY_MIN_DURATION_SEC = 1
 VIDEO_SUMMARY_MIN_TRANSCRIPT_WORDS = 1
 VIDEO_SUMMARY_NUM_IMAGES = 5 # 截取图片数量
+
+
+SUMMARY_CHECK_INTERVAL_MINUTES = 1  # 默认30分钟
+SUMMARY_MAX_VIDEOS_PER_BATCH = 3  # 默认每批3个视频

@@ -17,6 +17,34 @@ from starlette.staticfiles import StaticFiles
 # 数据库模型和连接配置
 from database import SessionLocal, engine
 import models, schemas
+from contextlib import asynccontextmanager
+from background_tasks import video_summary_scheduler
+import asyncio
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # 启动时执行
+    print("Starting FastAPI application...")
+    
+    # 确保所有目录存在
+    os.makedirs("static/videos", exist_ok=True)
+    os.makedirs("static/covers", exist_ok=True)
+    os.makedirs("static/avatars", exist_ok=True)
+    os.makedirs("static/videos/resolutions", exist_ok=True)
+    os.makedirs("temp_video_summary", exist_ok=True)
+    
+    # 创建数据库表
+    models.Base.metadata.create_all(bind=engine)
+    
+    # 启动后台任务调度器 - 使用配置文件中的默认值
+    asyncio.create_task(video_summary_scheduler.start_scheduler())
+
+    
+    yield
+    
+
+    video_summary_scheduler.stop_scheduler()
+    
 
 app = FastAPI(title="短视频应用API")
 # 添加CORS中间件（如果需要）
@@ -1151,6 +1179,42 @@ async def get_video_resolutions(vid: int, db: Session = Depends(get_db)):
     return [{"resolution": r.resolution, "url": r.video_url} for r in resolutions]
 
 
+from config import SUMMARY_MAX_VIDEOS_PER_BATCH
+
+@app.post("/admin/trigger_summary_batch")
+async def trigger_summary_batch(max_videos: int = None):
+    """
+    手动触发一批视频摘要任务（管理员接口）
+    """
+    try:
+        # 如果没有指定max_videos，使用配置文件中的值
+        max_videos = max_videos or SUMMARY_MAX_VIDEOS_PER_BATCH
+        await video_summary_scheduler.run_summary_batch(max_videos_per_batch=max_videos)
+        return {"success": True, "message": f"Summary batch triggered for up to {max_videos} videos"}
+    except Exception as e:
+        
+        raise HTTPException(status_code=500, detail="Failed to trigger summary batch")
+    
+@app.get("/admin/summary_status")
+async def get_summary_status(db: Session = Depends(get_db)):
+    """
+    获取视频摘要状态统计（管理员接口）
+    """
+    try:
+        total_videos = db.query(models.Video).count()
+        videos_with_summary = db.query(models.VideoSummary).count()
+        videos_without_summary = total_videos - videos_with_summary
+        
+        return {
+            "total_videos": total_videos,
+            "videos_with_summary": videos_with_summary,
+            "videos_without_summary": videos_without_summary,
+            "summary_coverage": f"{(videos_with_summary/total_videos*100):.1f}%" if total_videos > 0 else "0%"
+        }
+    except Exception as e:
+
+        raise HTTPException(status_code=500, detail="Failed to get summary status")
+    
 # 启动服务器
 if __name__ == "__main__":
     import uvicorn
