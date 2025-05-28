@@ -21,29 +21,28 @@ from contextlib import asynccontextmanager
 from background_tasks import video_summary_scheduler
 import asyncio
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    # 启动时执行
-    print("Starting FastAPI application...")
+# @asynccontextmanager
+# async def lifespan(app: FastAPI):
+#     # 启动时执行
+#     print("Starting FastAPI application...")
     
-    # 确保所有目录存在
-    os.makedirs("static/videos", exist_ok=True)
-    os.makedirs("static/covers", exist_ok=True)
-    os.makedirs("static/avatars", exist_ok=True)
-    os.makedirs("static/videos/resolutions", exist_ok=True)
-    os.makedirs("temp_video_summary", exist_ok=True)
+#     # 确保所有目录存在
+#     os.makedirs("static/videos", exist_ok=True)
+#     os.makedirs("static/covers", exist_ok=True)
+#     os.makedirs("static/avatars", exist_ok=True)
+#     os.makedirs("static/videos/resolutions", exist_ok=True)
+#     os.makedirs("temp_video_summary", exist_ok=True)
     
-    # 创建数据库表
-    models.Base.metadata.create_all(bind=engine)
+#     # 创建数据库表
+#     models.Base.metadata.create_all(bind=engine)
     
-    # 启动后台任务调度器 - 使用配置文件中的默认值
-    asyncio.create_task(video_summary_scheduler.start_scheduler())
+#     # 启动后台任务调度器 - 使用配置文件中的默认值
+#     asyncio.create_task(video_summary_scheduler.start_scheduler())
 
-    
-    yield
-    
 
-    video_summary_scheduler.stop_scheduler()
+#     yield
+    
+#     video_summary_scheduler.stop_scheduler()
     
 
 app = FastAPI(title="短视频应用API")
@@ -223,32 +222,34 @@ async def get_user_info(uid: int, request: Request, db: Session = Depends(get_db
 
 @app.post("/upload/avatar")
 async def upload_avatar_file(
-        image: UploadFile = File(...),
-        request: Request = None
+    image: UploadFile = File(...),
+    request: Request = None
 ):
     # 确保目录存在
     os.makedirs("static/avatars", exist_ok=True)
-
-    # 生成唯一的文件名（使用时间戳避免冲突）
+    
+    # 生成唯一的文件名（使用时间戳和随机数，避免重复）
+    import uuid
     timestamp = datetime.now().strftime('%Y%m%d%H%M%S')
+    unique_id = str(uuid.uuid4())[:8]  # 取UUID的前8位
     file_extension = image.filename.split('.')[-1] if '.' in image.filename else 'jpg'
-    avatar_filename = f"temp_{timestamp}.{file_extension}"
+    avatar_filename = f"avatar_{timestamp}_{unique_id}.{file_extension}"
     file_location = f"static/avatars/{avatar_filename}"
-
+    
     # 保存原始文件
     with open(file_location, "wb") as file_object:
         shutil.copyfileobj(image.file, file_object)
-
+    
     # 使用OpenCV调整头像尺寸到300x300
     img = cv2.imread(file_location)
     if img is not None:
         resized_img = cv2.resize(img, (300, 300))
         cv2.imwrite(file_location, resized_img)
-
+    
     # 返回完整的URL
     base_url = str(request.base_url).rstrip('/')
     avatar_url = f"{base_url}/static/avatars/{avatar_filename}"
-
+    
     return {
         "success": True,
         "avatar_url": avatar_url,
@@ -256,57 +257,6 @@ async def upload_avatar_file(
         "message": "Avatar uploaded successfully"
     }
 
-
-@app.post("/user/{uid}/confirm_avatar")
-async def confirm_avatar(
-        uid: int,
-        avatar_url: str = Form(...),
-        db: Session = Depends(get_db)
-):
-    user = db.query(models.User).filter(models.User.uid == uid).first()
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-
-    # 从完整URL中提取文件名
-    # 例如：http://106.13.81.108:8000/static/avatars/temp_20250518140000.jpg
-    # 提取：temp_20250518140000.jpg
-    if "/static/avatars/" in avatar_url:
-        filename = avatar_url.split("/static/avatars/")[-1]
-    else:
-        raise HTTPException(status_code=400, detail="Invalid avatar URL")
-
-    # 检查文件是否存在
-    file_path = f"static/avatars/{filename}"
-    if not os.path.exists(file_path):
-        raise HTTPException(status_code=404, detail="Avatar file not found")
-
-    # 如果是临时文件，重命名为用户专用文件名
-    if filename.startswith("temp_"):
-        file_extension = filename.split('.')[-1]
-        new_filename = f"{uid}_avatar.{file_extension}"
-        new_file_path = f"static/avatars/{new_filename}"
-
-        # 如果用户已有头像，删除旧文件
-        if user.avatar_url and user.avatar_url != "default_avatar.png":
-            old_file_path = f"static/avatars/{user.avatar_url}"
-            if os.path.exists(old_file_path):
-                os.remove(old_file_path)
-
-        # 重命名文件
-        os.rename(file_path, new_file_path)
-        final_filename = new_filename
-    else:
-        final_filename = filename
-
-    # 更新数据库中的头像文件名
-    user.avatar_url = final_filename
-    db.commit()
-
-    return {
-        "success": True,
-        "avatar_url": final_filename,
-        "message": "Avatar updated successfully"
-    }
 
 
 @app.delete("/upload/avatar/cleanup")
@@ -426,94 +376,144 @@ async def update_bio(uid: int, bio: str = Form(...), db: Session = Depends(get_d
     return {"success": True}
 
 
+def parse_avatar_filename(avatar_input: str) -> str:
+    """
+    通用头像文件名解析函数
+    支持解析以下格式：
+    1. 完整HTTP URL: http://domain.com/static/avatars/filename.jpg
+    2. 相对路径: static/avatars/filename.jpg
+    3. 纯文件名: filename.jpg
+    
+    返回纯文件名
+    """
+    if not avatar_input:
+        return None
+    
+    # 情况1: 完整HTTP URL
+    if avatar_input.startswith(('http://', 'https://')):
+        if '/static/avatars/' in avatar_input:
+            return avatar_input.split('/static/avatars/')[-1]
+        else:
+            raise ValueError("Invalid avatar URL format: missing /static/avatars/ path")
+    
+    # 情况2: 相对路径 static/avatars/filename
+    elif avatar_input.startswith('static/avatars/'):
+        return avatar_input[15:]  # 移除 'static/avatars/' 前缀
+    
+    # 情况3: 纯文件名
+    else:
+        # 检查是否包含路径分隔符，如果有则可能是其他格式的路径
+        if '/' in avatar_input or '\\' in avatar_input:
+            # 尝试提取最后一部分作为文件名
+            filename = avatar_input.split('/')[-1].split('\\')[-1]
+            return filename
+        else:
+            # 直接返回文件名
+            return avatar_input
+
+@app.post("/user/{uid}/confirm_avatar")
+async def confirm_avatar(
+    uid: int,
+    avatar_url: str = Form(...),
+    db: Session = Depends(get_db)
+):
+    user = db.query(models.User).filter(models.User.uid == uid).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    try:
+        # 使用通用解析函数
+        filename = parse_avatar_filename(avatar_url)
+        if not filename:
+            raise HTTPException(status_code=400, detail="Invalid avatar URL or filename")
+        
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    
+    # 检查文件是否存在
+    file_path = f"static/avatars/{filename}"
+    if not os.path.exists(file_path):
+        raise HTTPException(status_code=404, detail="Avatar file not found")
+    
+    # 删除用户的旧头像文件（如果存在且不是默认头像）
+    if user.avatar_url and user.avatar_url != "default_avatar.png":
+        old_file_path = f"static/avatars/{user.avatar_url}"
+        if os.path.exists(old_file_path):
+            try:
+                os.remove(old_file_path)
+            except Exception as e:
+                print(f"Warning: Could not delete old avatar file {old_file_path}: {e}")
+    
+    # 直接使用新的文件名，不重命名文件
+    user.avatar_url = filename
+    db.commit()
+    
+    return {
+        "success": True,
+        "avatar_url": filename,
+        "message": "Avatar updated successfully"
+    }
+
 @app.post("/user/{uid}/profile")
 async def update_user_profile(
-        uid: int,
-        nickname: Optional[str] = Form(None),
-        bio: Optional[str] = Form(None),
-        avatar_url: Optional[str] = Form(None),  # 这里传入已经上传好的头像URL或文件名
-        db: Session = Depends(get_db)
+    uid: int,
+    nickname: Optional[str] = Form(None),
+    bio: Optional[str] = Form(None),
+    avatar_url: Optional[str] = Form(None),
+    db: Session = Depends(get_db)
 ):
     """
     通用个人信息修改接口
-    可以一次性修改昵称、简介、头像等信息
-    头像需要先通过 /upload/avatar 接口上传，然后传入URL或文件名
+    支持多种头像URL格式
     """
     user = db.query(models.User).filter(models.User.uid == uid).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
-
+    
     updated_fields = []
-
+    
     # 更新昵称
     if nickname is not None:
         user.nickname = nickname
         updated_fields.append("nickname")
-
+    
     # 更新简介
     if bio is not None:
         user.bio = bio
         updated_fields.append("bio")
-
+    
     # 更新头像
     if avatar_url is not None:
-        # 处理头像URL，提取文件名
-        if avatar_url.startswith("http"):
-            # 如果传入的是完整URL，提取文件名
-            if "/static/avatars/" in avatar_url:
-                filename = avatar_url.split("/static/avatars/")[-1]
-            else:
-                raise HTTPException(status_code=400, detail="Invalid avatar URL format")
-        else:
-            # 如果传入的就是文件名
-            filename = avatar_url
-
+        try:
+            # 使用通用解析函数
+            filename = parse_avatar_filename(avatar_url)
+            if not filename:
+                raise HTTPException(status_code=400, detail="Invalid avatar URL or filename")
+            
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        
         # 检查文件是否存在
         file_path = f"static/avatars/{filename}"
         if not os.path.exists(file_path):
             raise HTTPException(status_code=404, detail="Avatar file not found")
-
-        # 如果是临时文件，重命名为用户专用文件名
-        if filename.startswith("temp_"):
-            file_extension = filename.split('.')[-1]
-            new_filename = f"{uid}_avatar.{file_extension}"
-            new_file_path = f"static/avatars/{new_filename}"
-
-            # 如果用户已有头像，删除旧文件
-            if user.avatar_url and user.avatar_url != "default_avatar.png":
-                old_file_path = f"static/avatars/{user.avatar_url}"
-                if os.path.exists(old_file_path):
+        
+        # 删除用户的旧头像文件（如果存在且不是默认头像）
+        if user.avatar_url and user.avatar_url != "default_avatar.png":
+            old_file_path = f"static/avatars/{user.avatar_url}"
+            if os.path.exists(old_file_path):
+                try:
                     os.remove(old_file_path)
-
-            # 重命名文件
-            os.rename(file_path, new_file_path)
-            user.avatar_url = new_filename
-        else:
-            # 如果不是临时文件，直接使用
-            # 但需要验证文件名格式是否合理
-            if filename != "default_avatar.png" and not filename.startswith(f"{uid}_"):
-                # 为了安全，重命名文件
-                file_extension = filename.split('.')[-1] if '.' in filename else 'jpg'
-                new_filename = f"{uid}_avatar.{file_extension}"
-                new_file_path = f"static/avatars/{new_filename}"
-
-                # 删除旧头像
-                if user.avatar_url and user.avatar_url != "default_avatar.png":
-                    old_file_path = f"static/avatars/{user.avatar_url}"
-                    if os.path.exists(old_file_path):
-                        os.remove(old_file_path)
-
-                # 复制文件到新位置
-                shutil.copy2(file_path, new_file_path)
-                user.avatar_url = new_filename
-            else:
-                user.avatar_url = filename
-
+                except Exception as e:
+                    print(f"Warning: Could not delete old avatar file {old_file_path}: {e}")
+        
+        # 直接使用新的文件名，不重命名
+        user.avatar_url = filename
         updated_fields.append("avatar")
-
+    
     # 提交更改到数据库
     db.commit()
-
+    
     return {
         "success": True,
         "updated_fields": updated_fields,
@@ -525,6 +525,9 @@ async def update_user_profile(
         },
         "message": f"Updated {', '.join(updated_fields) if updated_fields else 'no fields'}"
     }
+
+
+
 
 
 
