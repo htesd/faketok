@@ -179,47 +179,47 @@ async def get_user_info(uid: int, request: Request, db: Session = Depends(get_db
     }
 
 
-@app.post("/user/{uid}/profile")
-async def update_profile_image(
-        uid: int,
-        image: UploadFile = File(...),
-        request: Request = None,
-        db: Session = Depends(get_db)
-):
-    """原有的一步式头像更新接口，保持向后兼容"""
-    user = db.query(models.User).filter(models.User.uid == uid).first()
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-
-    # 确保目录存在
-    os.makedirs("static/avatars", exist_ok=True)
-
-    # 保存上传的头像
-    file_extension = image.filename.split('.')[-1] if '.' in image.filename else 'jpg'
-    avatar_filename = f"{uid}_avatar.{file_extension}"
-    file_location = f"static/avatars/{avatar_filename}"
-
-    # 如果用户已有头像，删除旧文件
-    if user.avatar_url and user.avatar_url != "default_avatar.png":
-        old_file_path = f"static/avatars/{user.avatar_url}"
-        if os.path.exists(old_file_path):
-            os.remove(old_file_path)
-
-    # 保存原始文件
-    with open(file_location, "wb") as file_object:
-        shutil.copyfileobj(image.file, file_object)
-
-    # 使用OpenCV调整头像尺寸到300x300
-    img = cv2.imread(file_location)
-    if img is not None:
-        resized_img = cv2.resize(img, (300, 300))
-        cv2.imwrite(file_location, resized_img)
-
-    # 更新数据库中的头像文件名
-    user.avatar_url = avatar_filename
-    db.commit()
-
-    return {"success": True, "avatar_url": avatar_filename}
+# @app.post("/user/{uid}/profile")
+# async def update_profile_image(
+#         uid: int,
+#         image: UploadFile = File(...),
+#         request: Request = None,
+#         db: Session = Depends(get_db)
+# ):
+#     """原有的一步式头像更新接口，保持向后兼容"""
+#     user = db.query(models.User).filter(models.User.uid == uid).first()
+#     if not user:
+#         raise HTTPException(status_code=404, detail="User not found")
+#
+#     # 确保目录存在
+#     os.makedirs("static/avatars", exist_ok=True)
+#
+#     # 保存上传的头像
+#     file_extension = image.filename.split('.')[-1] if '.' in image.filename else 'jpg'
+#     avatar_filename = f"{uid}_avatar.{file_extension}"
+#     file_location = f"static/avatars/{avatar_filename}"
+#
+#     # 如果用户已有头像，删除旧文件
+#     if user.avatar_url and user.avatar_url != "default_avatar.png":
+#         old_file_path = f"static/avatars/{user.avatar_url}"
+#         if os.path.exists(old_file_path):
+#             os.remove(old_file_path)
+#
+#     # 保存原始文件
+#     with open(file_location, "wb") as file_object:
+#         shutil.copyfileobj(image.file, file_object)
+#
+#     # 使用OpenCV调整头像尺寸到300x300
+#     img = cv2.imread(file_location)
+#     if img is not None:
+#         resized_img = cv2.resize(img, (300, 300))
+#         cv2.imwrite(file_location, resized_img)
+#
+#     # 更新数据库中的头像文件名
+#     user.avatar_url = avatar_filename
+#     db.commit()
+#
+#     return {"success": True, "avatar_url": avatar_filename}
 
 @app.post("/upload/avatar")
 async def upload_avatar_file(
@@ -347,7 +347,7 @@ def get_avatar_url(request: Request, avatar_filename: str) -> str:
     else:
         # 返回用户头像的完整URL
         base_url = str(request.base_url).rstrip('/')
-        return f"{base_url}/{avatar_filename}"
+        return f"{base_url}/static/avatars/{avatar_filename}"
 
 
 # 修复辅助函数：处理文件URL
