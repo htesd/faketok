@@ -151,30 +151,80 @@ async def register_user(
 
 # 用户相关API
 @app.get("/user/{uid}/info")
-async def get_user_info(uid: int, request: Request, db: Session = Depends(get_db)):
+def get_user_info(uid: int, db: Session = Depends(get_db)):
     user = db.query(models.User).filter(models.User.uid == uid).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
-
-    # 获取用户的作品、收藏、喜欢等信息
-    videos = db.query(models.Video).filter(models.Video.uid == uid).all()
-    favorites = db.query(models.Favorite).filter(models.Favorite.uid == uid).all()
-    likes = db.query(models.Like).filter(models.Like.uid == uid).all()
-
-    # 获取关注和粉丝
-    following = db.query(models.Follow).filter(models.Follow.follower_id == uid).all()
-    followers = db.query(models.Follow).filter(models.Follow.followed_id == uid).all()
-
+    
+    # 获取关注数量
+    following_count = db.query(models.UserFollow).filter(
+        models.UserFollow.follower_id == uid
+    ).count()
+    
+    # 获取粉丝数量
+    followers_count = db.query(models.UserFollow).filter(
+        models.UserFollow.followed_id == uid
+    ).count()
+    
+    # 获取视频数量
+    videos_count = db.query(models.Video).filter(
+        models.Video.uid == uid
+    ).count()
+    
+    # 可选：获取关注列表和粉丝列表
+    following_list = []
+    followers_list = []
+    
+    # 获取用户关注的人
+    following_relations = db.query(models.UserFollow).filter(
+        models.UserFollow.follower_id == uid
+    ).all()
+    
+    for relation in following_relations:
+        followed_user = db.query(models.User).filter(
+            models.User.uid == relation.followed_id
+        ).first()
+        
+        if followed_user:
+            following_list.append({
+                "uid": followed_user.uid,
+                "nickname": followed_user.nickname,
+                "avatar_url": followed_user.avatar_url
+            })
+    
+    # 获取关注用户的人
+    follower_relations = db.query(models.UserFollow).filter(
+        models.UserFollow.followed_id == uid
+    ).all()
+    
+    for relation in follower_relations:
+        follower_user = db.query(models.User).filter(
+            models.User.uid == relation.follower_id
+        ).first()
+        
+        if follower_user:
+            followers_list.append({
+                "uid": follower_user.uid,
+                "nickname": follower_user.nickname,
+                "avatar_url": follower_user.avatar_url
+            })
+    
     return {
-        "uid": user.uid,
-        "nickname": user.nickname,
-        "bio": user.bio,
-        "avatar_url": get_avatar_url(request, user.avatar_url),
-        "videos": [v.vid for v in videos],
-        "favorites": [f.vid for f in favorites],
-        "likes": [l.vid for l in likes],
-        "following": [f.followed_id for f in following],
-        "followers": [f.follower_id for f in followers]
+        "success": True,
+        "user": {
+            "uid": user.uid,
+            "username": user.username,
+            "nickname": user.nickname,
+            "bio": user.bio,
+            "avatar_url": user.avatar_url,
+            "created_at": user.created_at,
+            # 添加关注和粉丝信息
+            "following_count": following_count,
+            "followers_count": followers_count,
+            "videos_count": videos_count,
+            "following": following_list,
+            "followers": followers_list
+        }
     }
 
 
@@ -1218,6 +1268,112 @@ async def get_summary_status(db: Session = Depends(get_db)):
 
         raise HTTPException(status_code=500, detail="Failed to get summary status")
     
+
+
+# main.py 添加关注相关接口
+
+# 关注用户接口
+@app.post("/user/follow")
+async def follow_user(
+    follower_id: int = Form(...),  # 关注者ID
+    followed_id: int = Form(...),  # 被关注者ID
+    db: Session = Depends(get_db)
+):
+    """关注用户接口"""
+    # 检查关注者是否存在
+    follower = db.query(models.User).filter(models.User.uid == follower_id).first()
+    if not follower:
+        raise HTTPException(status_code=404, detail="Follower user not found")
+    
+    # 检查被关注者是否存在
+    followed = db.query(models.User).filter(models.User.uid == followed_id).first()
+    if not followed:
+        raise HTTPException(status_code=404, detail="Followed user not found")
+    
+    # 不能关注自己
+    if follower_id == followed_id:
+        raise HTTPException(status_code=400, detail="Cannot follow yourself")
+    
+    # 检查是否已经关注
+    existing_follow = db.query(models.UserFollow).filter(
+        models.UserFollow.follower_id == follower_id,
+        models.UserFollow.followed_id == followed_id
+    ).first()
+    
+    if existing_follow:
+        # 已经关注过了，返回成功但不做任何更改
+        return {
+            "success": True,
+            "message": "Already following this user",
+            "already_following": True
+        }
+    
+    # 创建新的关注关系
+    new_follow = models.UserFollow(
+        follower_id=follower_id,
+        followed_id=followed_id
+    )
+    
+    db.add(new_follow)
+    db.commit()
+    
+    return {
+        "success": True,
+        "message": f"User {follower_id} is now following user {followed_id}",
+        "already_following": False
+    }
+
+# 取消关注接口
+@app.post("/user/unfollow")
+async def unfollow_user(
+    follower_id: int = Form(...),  # 关注者ID
+    followed_id: int = Form(...),  # 被关注者ID
+    db: Session = Depends(get_db)
+):
+    """取消关注用户接口"""
+    # 查找关注关系
+    follow_relation = db.query(models.UserFollow).filter(
+        models.UserFollow.follower_id == follower_id,
+        models.UserFollow.followed_id == followed_id
+    ).first()
+    
+    if not follow_relation:
+        # 关注关系不存在
+        return {
+            "success": True,
+            "message": "Not following this user",
+            "was_following": False
+        }
+    
+    # 删除关注关系
+    db.delete(follow_relation)
+    db.commit()
+    
+    return {
+        "success": True,
+        "message": f"User {follower_id} has unfollowed user {followed_id}",
+        "was_following": True
+    }
+
+# 检查关注状态接口
+@app.get("/user/{follower_id}/following/{followed_id}")
+async def check_following_status(
+    follower_id: int,
+    followed_id: int,
+    db: Session = Depends(get_db)
+):
+    """检查用户是否关注了另一个用户"""
+    # 查找关注关系
+    follow_relation = db.query(models.UserFollow).filter(
+        models.UserFollow.follower_id == follower_id,
+        models.UserFollow.followed_id == followed_id
+    ).first()
+    
+    return {
+        "success": True,
+        "is_following": follow_relation is not None
+    }
+
 # 启动服务器
 if __name__ == "__main__":
     import uvicorn
